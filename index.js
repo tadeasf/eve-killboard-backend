@@ -2,11 +2,18 @@ const express = require("express");
 const { MongoClient } = require("mongodb");
 const cron = require("node-cron");
 const axios = require("axios");
+const cors = require("cors");
 require("dotenv").config();
 
 const app = express();
 const port = process.env.PORT || 38978;
 const mongoUri = process.env.MONGO_URI;
+
+app.use(
+  cors({
+    origin: "*",
+  })
+);
 
 const client = new MongoClient(mongoUri);
 let db;
@@ -138,6 +145,11 @@ app.get("/api/weekly-summary", async (req, res) => {
           _id: "$characterName",
           killCount: { $sum: 1 },
           totalValue: { $sum: "$totalValue" },
+        },
+      },
+      {
+        $sort: {
+          totalValue: -1,
         },
       },
       {
