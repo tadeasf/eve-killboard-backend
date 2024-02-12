@@ -9,32 +9,22 @@ const app = express();
 const port = process.env.PORT || 38978;
 const mongoUri = process.env.MONGO_URI;
 
-app.use(
-  cors({
-    origin: "*",
-  })
-);
+app.use(cors({ origin: "*" }));
 
 const client = new MongoClient(mongoUri);
-let db;
-let killsCollection;
 
-// Connect to MongoDB when the application starts
-client
-  .connect()
-  .then(() => {
-    console.log("Connected to MongoDB");
-    db = client.db("eve-killboard");
-    killsCollection = db.collection("Kills");
-  })
-  .catch((error) => {
-    console.error("Failed to connect to MongoDB", error);
-    process.exit(1);
-  });
+async function connectToMongo() {
+  await client.connect();
+  console.log("Connected to MongoDB");
+  const db = client.db("eve-killboard");
+  const killsCollection = db.collection("Kills");
+  return killsCollection;
+}
+
+const killsCollectionPromise = connectToMongo();
+
 const characters = [
   { id: "1772807647", name: "Tadeas CZ" },
-  { id: "2114774296", name: "Cengar Creire-Geng" },
-  { id: "2116810440", name: "Deathly Hallows2" },
   { id: "2119522407", name: "7oXx" },
   { id: "1296770674", name: "Emnar Thidius" },
   { id: "94370897", name: "Richard Valdyr" },
@@ -59,15 +49,26 @@ const characters = [
   { id: "2117414873", name: "Tec8n0" },
   { id: "2120058366", name: "TheRealFatback" },
   { id: "2114249907", name: "Tion Galler" },
+  { id: "92663124", name: "Sville Sveltos" },
+  { id: "2115781306", name: "Aretha LouiseFrank" },
+  { id: "2113791254", name: "Cleanthes" },
+  { id: "2112599464", name: "Mad Dawg Yaken" },
+  { id: "1451471232", name: "mr bowjangles" },
+  { id: "2116105023", name: "Drithi Moonshae" },
+  { id: "2120186660", name: "ozzy993" },
+  { id: "134063007", name: "Yamcha7" },
+  { id: "93426904", name: "John Cravius" },
+  { id: "91613448", name: "Private Panacan" },
+  { id: "1135028350", name: "Arkady Drayson" },
+  { id: "93466458", name: "Malcolm Bobodiablo" },
+  { id: "91290222", name: "tainted demon" },
+  { id: "345875676", name: "Caleb Drakka" },
 ];
 
-const fetchAndStoreKillData = async () => {
+async function fetchAndStoreKillData() {
   try {
-    await client.connect();
-    const db = client.db("eve-killboard");
-    const killsCollection = db.collection("Kills");
-    console.log("fetching kill data");
-
+    const killsCollection = await killsCollectionPromise;
+    console.log("Fetching kill data");
     // Determine the start of the current week (Sunday as the start)
     const now = new Date();
     const firstDayOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
@@ -100,15 +101,15 @@ const fetchAndStoreKillData = async () => {
         }
       }
     }
+    console.log("Kill data fetched and stored");
   } catch (error) {
     console.error("Error during fetching and storing kill data:", error);
-  } finally {
-    await client.close();
   }
-};
+}
 
 // Immediately fetch kills on server start and schedule to run every 20 minutes
 fetchAndStoreKillData().catch(console.error);
+// Schedule to fetch kills data every 20 minutes
 cron.schedule("*/20 * * * *", () => {
   fetchAndStoreKillData().catch(console.error);
 });
@@ -119,11 +120,8 @@ app.get("/", (req, res) => {
 
 app.get("/api/weekly-summary", async (req, res) => {
   try {
-    // Ensure the MongoDB client is connected
-    if (!db || !killsCollection) {
-      throw new Error("MongoDB client is not connected");
-    }
-
+    const killsCollection = await killsCollectionPromise;
+    // Now you can use killsCollection for aggregation directly without connecting again
     // Calculate the start and end of the current week
     const now = new Date();
     const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
