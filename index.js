@@ -110,11 +110,6 @@ app.get("/", (req, res) => {
   res.send("EVE Online Kill Tracker Running");
 });
 
-app.get("/api/kills", async (req, res) => {
-  const kills = await Kill.find({});
-  res.json(kills);
-});
-
 app.get("/api/weekly-summary", async (req, res) => {
   try {
     // Ensure the MongoDB client is connected
