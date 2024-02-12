@@ -65,25 +65,40 @@ const characters = [
   { id: "345875676", name: "Caleb Drakka" },
 ];
 
+async function fetchWithRetry(url, retries = 3, delay = 3000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await axios.get(url);
+      return response.data; // Success
+    } catch (error) {
+      if (i === retries - 1) throw error; // Exhausted retries, throw error
+      console.log(`Request failed, retrying (${i + 1}/${retries})...`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
 async function fetchAndStoreKillData() {
   try {
     const killsCollection = await killsCollectionPromise;
     console.log("Fetching kill data");
-    // Determine the start of the current week (Sunday as the start)
+
     const now = new Date();
-    const firstDayOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
+    const dayOfWeek = now.getDay();
+    const firstDayOfWeek = new Date(
+      now.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1))
+    );
     firstDayOfWeek.setHours(0, 0, 0, 0); // Set to the start of the day
 
     for (const character of characters) {
       const zKillUrl = `https://zkillboard.com/api/kills/characterID/${character.id}/`;
-      const zKillResponse = await axios.get(zKillUrl);
+      const zKillResponse = await fetchWithRetry(zKillUrl);
 
-      for (const kill of zKillResponse.data) {
+      for (const kill of zKillResponse) {
         const esiUrl = `https://esi.evetech.net/latest/killmails/${kill.killmail_id}/${kill.zkb.hash}/`;
-        const esiResponse = await axios.get(esiUrl);
-        const killTime = new Date(esiResponse.data.killmail_time);
+        const esiResponse = await fetchWithRetry(esiUrl);
+        const killTime = new Date(esiResponse.killmail_time);
 
-        // Check if killmail is within the current week
         if (killTime >= firstDayOfWeek) {
           const existingKill = await killsCollection.findOne({
             killmailId: kill.killmail_id,
@@ -107,9 +122,8 @@ async function fetchAndStoreKillData() {
   }
 }
 
-// Immediately fetch kills on server start and schedule to run every 20 minutes
 fetchAndStoreKillData().catch(console.error);
-// Schedule to fetch kills data every 20 minutes
+
 cron.schedule("*/20 * * * *", () => {
   fetchAndStoreKillData().catch(console.error);
 });
