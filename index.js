@@ -100,10 +100,20 @@ async function fetchAndStoreKillData() {
         const killTime = new Date(esiResponse.killmail_time);
 
         if (killTime >= firstDayOfWeek) {
+          const solarSystemUrl = `https://esi.evetech.net/latest/universe/systems/${esiResponse.solar_system_id}/`;
+          const solarSystemResponse = await fetchWithRetry(solarSystemUrl);
+
+          const constellationUrl = `https://esi.evetech.net/latest/universe/constellations/${solarSystemResponse.constellation_id}/`;
+          const constellationResponse = await fetchWithRetry(constellationUrl);
+
+          const regionUrl = `https://esi.evetech.net/latest/universe/regions/${constellationResponse.region_id}/`;
+          const regionResponse = await fetchWithRetry(regionUrl);
+
           const existingKill = await killsCollection.findOne({
             killmailId: kill.killmail_id,
             characterId: character.id,
           });
+
           if (!existingKill) {
             await killsCollection.insertOne({
               characterId: character.id,
@@ -111,6 +121,10 @@ async function fetchAndStoreKillData() {
               killmailId: kill.killmail_id,
               killmailTime: killTime,
               totalValue: kill.zkb.totalValue,
+              solarSystemName: solarSystemResponse.name,
+              constellationId: solarSystemResponse.constellation_id,
+              regionId: constellationResponse.region_id,
+              regionName: regionResponse.name,
             });
           }
         }
@@ -150,6 +164,11 @@ app.get("/api/weekly-summary", async (req, res) => {
             $gte: startOfWeek,
             $lte: endOfWeek,
           },
+        },
+      },
+      {
+        $match: {
+          regionName: "Placid",
         },
       },
       {
