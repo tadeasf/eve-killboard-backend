@@ -168,7 +168,9 @@ app.get("/api/weekly-summary", async (req, res) => {
       },
       {
         $match: {
-          regionName: "Placid",
+          regionName: {
+            $in: ["Placid", "Syndicate", "Outer Ring", "Blackrise", "Essence"],
+          },
         },
       },
       {
