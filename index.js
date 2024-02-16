@@ -332,12 +332,16 @@ async function fetchShipName(shipTypeId) {
 }
 
 // Fetch system name from MongoDB
-async function fetchSystemName(systemId, db) {
+async function fetchSystemName(systemId) {
   try {
-    const system = await db.collection("systems").findOne({ id: systemId });
-    return system ? system.name : "Unknown";
+    const url = `https://esi.evetech.net/latest/universe/systems/${systemId}/?datasource=tranquility&language=en`;
+    const response = await axios.get(url);
+    return response.data.name;
   } catch (error) {
-    console.error(`Failed to fetch system name for ID ${systemId}:`, error);
+    console.error(
+      `Failed to fetch system name for system ID ${systemId}:`,
+      error
+    );
     throw error;
   }
 }
@@ -361,7 +365,7 @@ async function fetchAveragePrice(shipTypeId, db) {
 app.get("/api/recent-kills", async (req, res) => {
   try {
     const db = await dbPromise;
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const fiveMinutesAgo = new Date(Date.now() - 125 * 60 * 1000);
 
     const recentKills = await db
       .collection("killsBlops")
@@ -380,7 +384,7 @@ app.get("/api/recent-kills", async (req, res) => {
         return {
           killmail_time: kill.killmail_time,
           attacker_ships: attackerShips,
-          system: await fetchSystemName(kill.solar_system_id, db),
+          system: await fetchSystemName(kill.solar_system_id),
           zkill_url: `https://zkillboard.com/kill/${kill.killmail_id}/`,
         };
       })
