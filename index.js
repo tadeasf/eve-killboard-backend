@@ -418,14 +418,13 @@ async function processAndSendRecentKills() {
     message += `**TIMESTAMP:** ${kill.killmail_time}\n`;
     message += `**System:** ${kill.system}\n`;
     message += "**Attacker ships:**\n";
-    kill.attacker_ships.forEach((ship) => {
-      const formattedValue = `${ship.value
-        .toLocaleString("en-US", { style: "currency", currency: "ISK" })
-        .slice(0, -3)}`;
-      message += `**${ship.name}**, ${formattedValue},\n`;
+    kill.attacker_ships.forEach((ship, index) => {
+      const formattedValue = ship.value.toLocaleString("en-US");
+      message += `**${ship.name}:** ${formattedValue} ISK${
+        index < kill.attacker_ships.length - 1 ? "," : ""
+      }\n`;
     });
-    message = message.trimEnd();
-    message += `\n**Z-Kill URL:** ${kill.zkill_url}`;
+    message += `**Z-Kill URL:** ${kill.zkill_url}`;
 
     await postToDiscord(message);
   }
