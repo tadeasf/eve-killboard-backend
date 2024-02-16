@@ -30,7 +30,7 @@ async function fetchCharacters() {
   return charactersCollection.find({}).toArray();
 }
 
-async function fetchWithRetry(url, retries = 3, delay = 3000) {
+async function fetchWithRetry(url, retries = 3, delay = 10000) {
   for (let i = 0; i < retries; i++) {
     try {
       const response = await axios.get(url);
@@ -104,7 +104,7 @@ async function fetchAndStoreKillData() {
   }
 }
 
-fetchAndStoreKillData().catch(console.error);
+// fetchAndStoreKillData().catch(console.error);
 
 cron.schedule("*/20 * * * *", () => {
   fetchAndStoreKillData().catch(console.error);
@@ -176,14 +176,11 @@ async function updatePrices() {
   const db = await dbPromise;
   const collection = db.collection("Prices");
 
-  // Check if the collection exists and is not empty
   const count = await collection.countDocuments();
   if (count > 0) {
-    // Remove all documents if the collection is not empty
     await collection.deleteMany({});
   }
 
-  // Fetch new prices data
   const response = await axios.get(
     "https://esi.evetech.net/latest/markets/prices/?datasource=tranquility"
   );
@@ -192,21 +189,144 @@ async function updatePrices() {
     last_updated: new Date(),
   }));
 
-  // Insert new prices data into the collection
   await collection.insertMany(pricesData);
   console.log("Prices collection updated.");
 }
 
-// Schedule the task to run every 24 hours for updating prices
 cron.schedule("0 0 * * *", () => {
   console.log("Running a task every 24 hours to update prices");
   updatePrices().catch(console.error);
 });
 
-// Add an endpoint to manually trigger the prices update
 app.get("/api/update-prices", async (req, res) => {
   await updatePrices();
   res.send("Prices collection has been updated.");
+});
+
+app.get("/api/average-price/:type_id", async (req, res) => {
+  try {
+    const db = await dbPromise;
+    const collection = db.collection("Prices");
+    const typeId = parseInt(req.params.type_id);
+
+    if (isNaN(typeId)) {
+      return res.status(400).send("Invalid type_id provided.");
+    }
+
+    const priceDocument = await collection.findOne({ type_id: typeId });
+
+    if (!priceDocument) {
+      return res.status(404).send("Document for the given type_id not found.");
+    }
+
+    res.json({
+      type_id: typeId,
+      average_price: priceDocument.average_price,
+      last_updated: priceDocument.last_updated,
+    });
+  } catch (error) {
+    console.error("Error fetching average price:", error);
+    res.status(500).send("Internal Server Error");
+  }
+});
+
+// ! drop checking logic
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Fetch kill data for a specific system from zKillboard
+async function fetchKillDataForSystem(systemId) {
+  const zKillUrl = `https://zkillboard.com/api/kills/systemID/${systemId}/`;
+  try {
+    const response = await axios.get(zKillUrl);
+    return response.data;
+  } catch (error) {
+    console.error(
+      `Failed to fetch kill data for system ID ${systemId}:`,
+      error
+    );
+    throw error;
+  }
+}
+
+async function processFirstKillForSystem(systemId, db) {
+  try {
+    const kills = await fetchKillDataForSystem(systemId);
+    if (kills.length > 0) {
+      const firstKill = kills[0];
+      const existingKill = await db
+        .collection("killsBlops")
+        .findOne({ killmail_id: firstKill.killmail_id });
+
+      if (existingKill) {
+        console.log(
+          `Killmail ID ${firstKill.killmail_id} already processed for system ${systemId}. Waiting 60 seconds.`
+        );
+        await delay(60000);
+      } else {
+        await processKillmail(firstKill, db);
+      }
+    }
+  } catch (error) {
+    console.error(`Error processing first kill for system ${systemId}:`, error);
+  }
+}
+
+async function processKillmail(kill, db) {
+  const existingKill = await db
+    .collection("killsBlops")
+    .findOne({ killmail_id: kill.killmail_id });
+  if (existingKill) {
+    console.log(`Killmail ID ${kill.killmail_id} already processed.`);
+    return;
+  }
+
+  const esiUrl = `https://esi.evetech.net/latest/killmails/${kill.killmail_id}/${kill.zkb.hash}/`;
+  try {
+    const response = await axios.get(esiUrl);
+    const killData = response.data;
+
+    let expensiveAttackerFound = false;
+    for (const attacker of killData.attackers) {
+      const priceInfo = await db
+        .collection("Prices")
+        .findOne({ type_id: attacker.ship_type_id });
+      if (priceInfo && priceInfo.average_price > 500000000) {
+        expensiveAttackerFound = true;
+        break;
+      }
+    }
+
+    if (expensiveAttackerFound) {
+      await db.collection("killsBlops").insertOne({
+        killmail_id: kill.killmail_id,
+        killmail_time: killData.killmail_time,
+        solar_system_id: killData.solar_system_id,
+        victim: killData.victim,
+        attackers: killData.attackers,
+      });
+      console.log(
+        `Stored killmail ID ${kill.killmail_id} in killsBlops collection.`
+      );
+    }
+  } catch (error) {
+    console.error(`Failed to process killmail ID ${kill.killmail_id}:`, error);
+  }
+}
+
+// Main endpoint to initiate kill data processing with rate limiting
+app.get("/api/process-kills", async (req, res) => {
+  const db = await dbPromise;
+  const systems = await db.collection("systems").find({}).toArray();
+
+  for (const system of systems) {
+    await processFirstKillForSystem(system.id, db);
+    await delay(1500 / systems.length);
+  }
+
+  res.send("Completed processing the first kill for all systems.");
 });
 
 app.listen(port, () => console.log(`Server running on port ${port}`));
