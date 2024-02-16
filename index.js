@@ -30,7 +30,7 @@ async function connectToMongo() {
 
 const dbPromise = connectToMongo();
 
-// ! RÁN killboard core
+// ! RÁN killboard leaderbord
 
 async function fetchCharacters() {
   const db = await dbPromise;
@@ -238,8 +238,8 @@ app.get("/api/average-price/:type_id", async (req, res) => {
   }
 });
 
-// ! drop checking logic
-
+// ! --- kills for blops checking logic ---
+// --- fetch first kill for each system and store it in the database if done with expensive ship ---
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -321,6 +321,8 @@ app.get("/api/process-kills", async (req, res) => {
   res.send("Completed processing the first kill for all systems.");
 });
 
+// --- notification generating and sending logic ---
+
 async function fetchShipName(shipTypeId) {
   try {
     const url = `https://esi.evetech.net/latest/universe/types/${shipTypeId}/?datasource=tranquility&language=en`;
@@ -400,7 +402,7 @@ app.get("/api/recent-kills", async (req, res) => {
 });
 
 async function fetchRecentKills() {
-  const response = await fetch("http://localhost:38978/api/recent-kills"); // Adjust port and host as needed
+  const response = await fetch("http://localhost:38978/api/recent-kills");
   if (!response.ok) {
     console.error("Failed to fetch recent kills");
     return [];
@@ -449,6 +451,8 @@ async function fetchKillsForBlops() {
     console.error("Error in fetchKillsForBlops:", error);
   }
 }
+
+// ! --- cron jobs ---
 
 const jobFetchBlopsKills = new CronJob(
   "*/5 * * * *",
