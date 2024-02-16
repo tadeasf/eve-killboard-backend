@@ -241,7 +241,7 @@ async function fetchKillDataForSystem(systemId) {
   const zKillUrl = `https://zkillboard.com/api/kills/systemID/${systemId}/`;
   try {
     const response = await axios.get(zKillUrl);
-    return response.data;
+    return response.data[0]; // Return only the first kill
   } catch (error) {
     console.error(
       `Failed to fetch kill data for system ID ${systemId}:`,
@@ -253,21 +253,18 @@ async function fetchKillDataForSystem(systemId) {
 
 async function processFirstKillForSystem(systemId, db) {
   try {
-    const kills = await fetchKillDataForSystem(systemId);
-    if (kills.length > 0) {
-      const firstKill = kills[0];
+    const firstKill = await fetchKillDataForSystem(systemId);
+    if (firstKill) {
       const existingKill = await db
         .collection("killsBlops")
         .findOne({ killmail_id: firstKill.killmail_id });
-
       if (existingKill) {
         console.log(
-          `Killmail ID ${firstKill.killmail_id} already processed for system ${systemId}. Waiting 60 seconds.`
+          `Killmail ID ${firstKill.killmail_id} already processed for system ${systemId}.`
         );
-        await delay(60000);
-      } else {
-        await processKillmail(firstKill, db);
+        return; // Skip if killmail already processed
       }
+      await processKillmail(firstKill, db);
     }
   } catch (error) {
     console.error(`Error processing first kill for system ${systemId}:`, error);
@@ -275,44 +272,33 @@ async function processFirstKillForSystem(systemId, db) {
 }
 
 async function processKillmail(kill, db) {
-  const existingKill = await db
-    .collection("killsBlops")
-    .findOne({ killmail_id: kill.killmail_id });
-  if (existingKill) {
-    console.log(`Killmail ID ${kill.killmail_id} already processed.`);
-    return;
-  }
-
   const esiUrl = `https://esi.evetech.net/latest/killmails/${kill.killmail_id}/${kill.zkb.hash}/`;
-  try {
-    const response = await axios.get(esiUrl);
-    const killData = response.data;
+  const response = await axios.get(esiUrl);
+  const killData = response.data;
 
-    let expensiveAttackerFound = false;
-    for (const attacker of killData.attackers) {
+  const attackersWithPriceCheck = await Promise.all(
+    killData.attackers.map(async (attacker) => {
       const priceInfo = await db
         .collection("Prices")
         .findOne({ type_id: attacker.ship_type_id });
-      if (priceInfo && priceInfo.average_price > 500000000) {
-        expensiveAttackerFound = true;
-        break;
-      }
-    }
+      return priceInfo && priceInfo.average_price > 500000000 ? attacker : null;
+    })
+  );
 
-    if (expensiveAttackerFound) {
-      await db.collection("killsBlops").insertOne({
-        killmail_id: kill.killmail_id,
-        killmail_time: killData.killmail_time,
-        solar_system_id: killData.solar_system_id,
-        victim: killData.victim,
-        attackers: killData.attackers,
-      });
-      console.log(
-        `Stored killmail ID ${kill.killmail_id} in killsBlops collection.`
-      );
-    }
-  } catch (error) {
-    console.error(`Failed to process killmail ID ${kill.killmail_id}:`, error);
+  const expensiveAttackers = attackersWithPriceCheck.filter(
+    (attacker) => attacker !== null
+  );
+  if (expensiveAttackers.length > 0) {
+    await db.collection("killsBlops").insertOne({
+      killmail_id: kill.killmail_id,
+      killmail_time: killData.killmail_time,
+      solar_system_id: killData.solar_system_id,
+      victim: killData.victim,
+      attackers: killData.attackers,
+    });
+    console.log(
+      `Stored killmail ID ${kill.killmail_id} in killsBlops collection.`
+    );
   }
 }
 
@@ -321,12 +307,90 @@ app.get("/api/process-kills", async (req, res) => {
   const db = await dbPromise;
   const systems = await db.collection("systems").find({}).toArray();
 
+  // Throttle requests to zKillboard to 1 request per second
   for (const system of systems) {
     await processFirstKillForSystem(system.id, db);
-    await delay(1500 / systems.length);
+    await delay(1000); // Wait for 1 second before processing the next system
   }
 
   res.send("Completed processing the first kill for all systems.");
+});
+
+// Fetch ship name from ESI
+async function fetchShipName(shipTypeId) {
+  try {
+    const url = `https://esi.evetech.net/latest/universe/types/${shipTypeId}/?datasource=tranquility&language=en`;
+    const response = await axios.get(url);
+    return response.data.name;
+  } catch (error) {
+    console.error(
+      `Failed to fetch ship name for type ID ${shipTypeId}:`,
+      error
+    );
+    throw error;
+  }
+}
+
+// Fetch system name from MongoDB
+async function fetchSystemName(systemId, db) {
+  try {
+    const system = await db.collection("systems").findOne({ id: systemId });
+    return system ? system.name : "Unknown";
+  } catch (error) {
+    console.error(`Failed to fetch system name for ID ${systemId}:`, error);
+    throw error;
+  }
+}
+
+// Fetch average price for a ship type
+async function fetchAveragePrice(shipTypeId, db) {
+  try {
+    const priceInfo = await db
+      .collection("Prices")
+      .findOne({ type_id: shipTypeId });
+    return priceInfo ? priceInfo.average_price : null;
+  } catch (error) {
+    console.error(
+      `Failed to fetch average price for ship type ID ${shipTypeId}:`,
+      error
+    );
+    throw error;
+  }
+}
+
+app.get("/api/recent-kills", async (req, res) => {
+  try {
+    const db = await dbPromise;
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+
+    const recentKills = await db
+      .collection("killsBlops")
+      .find({ killmail_time: { $gte: fiveMinutesAgo.toISOString() } })
+      .toArray();
+
+    const killsData = await Promise.all(
+      recentKills.map(async (kill) => {
+        const attackerShips = await Promise.all(
+          kill.attackers.map(async (attacker) => ({
+            name: await fetchShipName(attacker.ship_type_id),
+            value: await fetchAveragePrice(attacker.ship_type_id, db),
+          }))
+        );
+
+        return {
+          killmail_time: kill.killmail_time,
+          attacker_ships: attackerShips,
+          system: await fetchSystemName(kill.solar_system_id, db),
+          zkill_url: `https://zkillboard.com/kill/${kill.killmail_id}/`,
+        };
+      })
+    );
+
+    res.json(killsData);
+  } catch (error) {
+    console.error("Error fetching recent kills:", error);
+    res.status(500).send("Internal Server Error");
+  }
 });
 
 app.listen(port, () => console.log(`Server running on port ${port}`));
