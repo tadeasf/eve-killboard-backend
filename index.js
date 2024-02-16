@@ -114,10 +114,6 @@ async function fetchAndStoreKillData() {
 
 // fetchAndStoreKillData().catch(console.error);
 
-cron.schedule("*/5 * * * *", () => {
-  fetchAndStoreKillData().catch(console.error);
-});
-
 app.get("/", (req, res) => {
   res.send("EVE Online Kill Tracker Running");
 });
@@ -200,11 +196,6 @@ async function updatePrices() {
   await collection.insertMany(pricesData);
   console.log("Prices collection updated.");
 }
-
-cron.schedule("0 0 * * *", () => {
-  console.log("Running a task every 24 hours to update prices");
-  updatePrices().catch(console.error);
-});
 
 app.get("/api/update-prices", async (req, res) => {
   await updatePrices();
@@ -423,15 +414,19 @@ async function postToDiscord(message) {
 async function processAndSendRecentKills() {
   const kills = await fetchRecentKills();
   for (const kill of kills) {
-    let message = `Timestamp: ${kill.killmail_time}\n`;
-    message += `System: ${kill.system}\n`;
-    message += "Attacker ships: ";
-    kill.attacker_ships.forEach((ship, index) => {
-      message += `${ship.name}, ${ship.value} ISK${
-        index < kill.attacker_ships.length - 1 ? ", " : ""
-      }`;
+    let message = "**--- POTENTIAL DROP ---**\n";
+    message += `**TIMESTAMP:** ${kill.killmail_time}\n`;
+    message += `**System:** ${kill.system}\n`;
+    message += "**Attacker ships:**\n";
+    kill.attacker_ships.forEach((ship) => {
+      const formattedValue = `${ship.value
+        .toLocaleString("en-US", { style: "currency", currency: "ISK" })
+        .slice(0, -3)}`;
+      message += `**${ship.name}**, ${formattedValue},\n`;
     });
-    message += `\nZ-Kill URL: ${kill.zkill_url}`;
+    message = message.trimEnd();
+    message += `\n**Z-Kill URL:** ${kill.zkill_url}`;
+
     await postToDiscord(message);
   }
 }
@@ -440,6 +435,7 @@ async function fetchKillsForBlops() {
   try {
     const db = await dbPromise;
     const systems = await db.collection("systems").find({}).toArray();
+    console.log("Fetching kills for blops...");
     for (const [index, system] of systems.entries()) {
       await processFirstKillForSystem(system.id, db);
       if (index < systems.length - 1) {
@@ -454,6 +450,18 @@ async function fetchKillsForBlops() {
 
 // ! --- cron jobs ---
 
+// leaderboard
+cron.schedule("*/15 * * * *", () => {
+  fetchAndStoreKillData().catch(console.error);
+});
+
+// prices
+cron.schedule("0 0 * * *", () => {
+  console.log("Running a task every 24 hours to update prices");
+  updatePrices().catch(console.error);
+});
+
+// fetch kills for all relevant systems in range via zkill and esi api
 const jobFetchBlopsKills = new CronJob(
   "*/5 * * * *",
   fetchKillsForBlops,
@@ -463,6 +471,7 @@ const jobFetchBlopsKills = new CronJob(
 );
 jobFetchBlopsKills.start();
 
+// discord notification for new kills
 const jobDiscord = new CronJob(
   "*/5 * * * *",
   processAndSendRecentKills,
