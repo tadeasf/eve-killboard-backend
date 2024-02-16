@@ -244,12 +244,11 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Fetch kill data for a specific system from zKillboard
 async function fetchKillDataForSystem(systemId) {
   const zKillUrl = `https://zkillboard.com/api/kills/systemID/${systemId}/`;
   try {
     const response = await axios.get(zKillUrl);
-    return response.data[0]; // Return only the first kill
+    return response.data[0];
   } catch (error) {
     console.error(
       `Failed to fetch kill data for system ID ${systemId}:`,
@@ -270,7 +269,7 @@ async function processFirstKillForSystem(systemId, db) {
         console.log(
           `Killmail ID ${firstKill.killmail_id} already processed for system ${systemId}.`
         );
-        return; // Skip if killmail already processed
+        return;
       }
       await processKillmail(firstKill, db);
     }
@@ -310,21 +309,18 @@ async function processKillmail(kill, db) {
   }
 }
 
-// Main endpoint to initiate kill data processing with rate limiting
 app.get("/api/process-kills", async (req, res) => {
   const db = await dbPromise;
   const systems = await db.collection("systems").find({}).toArray();
 
-  // Throttle requests to zKillboard to 1 request per second
   for (const system of systems) {
     await processFirstKillForSystem(system.id, db);
-    await delay(1000); // Wait for 1 second before processing the next system
+    await delay(1000);
   }
 
   res.send("Completed processing the first kill for all systems.");
 });
 
-// Fetch ship name from ESI
 async function fetchShipName(shipTypeId) {
   try {
     const url = `https://esi.evetech.net/latest/universe/types/${shipTypeId}/?datasource=tranquility&language=en`;
@@ -339,7 +335,6 @@ async function fetchShipName(shipTypeId) {
   }
 }
 
-// Fetch system name from MongoDB
 async function fetchSystemName(systemId) {
   try {
     const url = `https://esi.evetech.net/latest/universe/systems/${systemId}/?datasource=tranquility&language=en`;
@@ -354,7 +349,6 @@ async function fetchSystemName(systemId) {
   }
 }
 
-// Fetch average price for a ship type
 async function fetchAveragePrice(shipTypeId, db) {
   try {
     const priceInfo = await db
@@ -405,7 +399,6 @@ app.get("/api/recent-kills", async (req, res) => {
   }
 });
 
-// Function to fetch recent kills
 async function fetchRecentKills() {
   const response = await fetch("http://localhost:38978/api/recent-kills"); // Adjust port and host as needed
   if (!response.ok) {
@@ -415,7 +408,6 @@ async function fetchRecentKills() {
   return response.json();
 }
 
-// Function to post a message to Discord
 async function postToDiscord(message) {
   const webhookUrl =
     "https://discord.com/api/webhooks/1208181297663443014/mwx4VIlfFhq8RcbI9La-LFFW4z7uXkBiu9EWTbPm6vSqtGYWO7mTeNFpDy-ZZlJQ77gR";
@@ -426,7 +418,6 @@ async function postToDiscord(message) {
   });
 }
 
-// Function to process recent kills and send them to Discord
 async function processAndSendRecentKills() {
   const kills = await fetchRecentKills();
   for (const kill of kills) {
@@ -443,13 +434,38 @@ async function processAndSendRecentKills() {
   }
 }
 
-// Schedule to run every 5 minutes
-const job = new CronJob(
+async function fetchKillsForBlops() {
+  try {
+    const db = await dbPromise;
+    const systems = await db.collection("systems").find({}).toArray();
+    for (const [index, system] of systems.entries()) {
+      await processFirstKillForSystem(system.id, db);
+      if (index < systems.length - 1) {
+        await delay(1000);
+      }
+    }
+    console.log("Completed processing the first kill for all systems.");
+  } catch (error) {
+    console.error("Error in fetchKillsForBlops:", error);
+  }
+}
+
+const jobFetchBlopsKills = new CronJob(
+  "*/5 * * * *",
+  fetchKillsForBlops,
+  null,
+  true,
+  "Europe/Prague"
+);
+jobFetchBlopsKills.start();
+
+const jobDiscord = new CronJob(
   "*/5 * * * *",
   processAndSendRecentKills,
   null,
   true,
   "Europe/Prague"
 );
+jobDiscord.start();
 
 app.listen(port, () => console.log(`Server running on port ${port}`));
