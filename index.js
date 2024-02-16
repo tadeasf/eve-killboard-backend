@@ -3,7 +3,15 @@ const { MongoClient } = require("mongodb");
 const cron = require("node-cron");
 const axios = require("axios");
 const cors = require("cors");
+const { CronJob } = require("cron");
 require("dotenv").config();
+
+let fetch;
+import("node-fetch")
+  .then(({ default: fetchModule }) => {
+    fetch = fetchModule;
+  })
+  .catch((error) => console.error("Failed to load node-fetch:", error));
 
 const app = express();
 const port = process.env.PORT || 38978;
@@ -106,7 +114,7 @@ async function fetchAndStoreKillData() {
 
 // fetchAndStoreKillData().catch(console.error);
 
-cron.schedule("*/20 * * * *", () => {
+cron.schedule("*/5 * * * *", () => {
   fetchAndStoreKillData().catch(console.error);
 });
 
@@ -365,7 +373,7 @@ async function fetchAveragePrice(shipTypeId, db) {
 app.get("/api/recent-kills", async (req, res) => {
   try {
     const db = await dbPromise;
-    const fiveMinutesAgo = new Date(Date.now() - 125 * 60 * 1000);
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
 
     const recentKills = await db
       .collection("killsBlops")
@@ -396,5 +404,52 @@ app.get("/api/recent-kills", async (req, res) => {
     res.status(500).send("Internal Server Error");
   }
 });
+
+// Function to fetch recent kills
+async function fetchRecentKills() {
+  const response = await fetch("http://localhost:38978/api/recent-kills"); // Adjust port and host as needed
+  if (!response.ok) {
+    console.error("Failed to fetch recent kills");
+    return [];
+  }
+  return response.json();
+}
+
+// Function to post a message to Discord
+async function postToDiscord(message) {
+  const webhookUrl =
+    "https://discord.com/api/webhooks/1208181297663443014/mwx4VIlfFhq8RcbI9La-LFFW4z7uXkBiu9EWTbPm6vSqtGYWO7mTeNFpDy-ZZlJQ77gR";
+  await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: message }),
+  });
+}
+
+// Function to process recent kills and send them to Discord
+async function processAndSendRecentKills() {
+  const kills = await fetchRecentKills();
+  for (const kill of kills) {
+    let message = `Timestamp: ${kill.killmail_time}\n`;
+    message += `System: ${kill.system}\n`;
+    message += "Attacker ships: ";
+    kill.attacker_ships.forEach((ship, index) => {
+      message += `${ship.name}, ${ship.value} ISK${
+        index < kill.attacker_ships.length - 1 ? ", " : ""
+      }`;
+    });
+    message += `\nZ-Kill URL: ${kill.zkill_url}`;
+    await postToDiscord(message);
+  }
+}
+
+// Schedule to run every 5 minutes
+const job = new CronJob(
+  "*/5 * * * *",
+  processAndSendRecentKills,
+  null,
+  true,
+  "Europe/Prague"
+);
 
 app.listen(port, () => console.log(`Server running on port ${port}`));
